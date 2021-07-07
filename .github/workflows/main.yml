@@ -7,15 +7,15 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    name: Update downstream index repo
+    name: Update downstream infogulch/index repo
 
     steps:
       - uses: actions/checkout@v2
         with:
           fetch-depth: 0
-      - uses: nxtlvlsoftware/git-subtree-action@1
+      - uses: nxtlvlsoftware/git-subtree-action@1.1
         with:
-          repo: 'infogulch/index'
-          path: '_notebooks'
+          repo: infogulch/index
+          path: _notebooks
           deploy_key: ${{ secrets.DOWNSTREAM_GITHUB_DEPLOY_KEY }}
           force: true # will force push to the downstream repository

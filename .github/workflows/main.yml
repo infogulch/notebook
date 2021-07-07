@@ -16,7 +16,7 @@ jobs:
       - uses: nxtlvlsoftware/git-subtree-action@1.1
         with:
           repo: infogulch/index
-          path: _notebooks
+          path: 
           deploy_key: ${{ secrets.DOWNSTREAM_GITHUB_DEPLOY_KEY }}
           force: false # will force push to the downstream repository
 

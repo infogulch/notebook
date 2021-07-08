@@ -6,7 +6,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -x POST -H "Authorization: token ${GH_WORKFLOW_PAT}" -H "Content-Type: application/json" \
+          curl -X POST -H "Authorization: token ${GH_WORKFLOW_PAT}" -H "Content-Type: application/json" \
           https://api.github.com/repos/infogulch/index/dispatches \
           -d '{"event_type": "notebooks_push"}'
 

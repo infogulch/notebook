@@ -12,177 +12,353 @@ using Base.Iterators, Base.Threads, Printf
 
 # ╔═╡ 8ad81282-7a8e-4769-81d4-bb7fd3b7b1a5
 md"
-# Merklist over Galois Fields
+# List hash as matrices over finite fields
 
-In my previous post, 
+In my [previous post](https://blog.infogulch.com/merklist/2021/07/07/Merklist.html), we explored a definition for the hash of a list: hash each element, interpret the hash digest as a matrix with 8-bit unsigned int elements, and define the hash of the whole list to be the result of multiplying the matrices together. We found that this has some neat properties and works for a small number of elements, but  we also found that this definition is deficient because after enough entries are multiplied the list hash degenerates into the zero matrix.
+
+If there is a primary reason this construction of the idea doesn't work, it's because the element hashes interpreted as matrices aren't invertible. The chance that a random matrix with integer mod 256 elements is invertible is equivalent to the chance of every element being odd; with 64 elements and a 50% chance per element, that's an overall $\frac{1}{2^{64}}$ chance. Meaning it's *possible* but very unlikely, and definitely not computationally efficient to find.
+
+However, if we choose a different element type this degeneracy problem can be solved. Here we experiment with using [finite field](https://en.wikipedia.org/wiki/Finite_field) elements instead -- specifically $GF(256)$ which provides a $\frac{255}{256}$ chance of being invertible (much better!). At the end we also observe what in my opinion is the biggest benefit of this kind of definition for the hash of a list.
 "
 
 # ╔═╡ d8ab88dc-2278-42a7-b6e0-2dd67aad9c0f
-md"Here are the main packages that we'll use, followed by some helper libraries"
+md"
+## Galois Fields
+
+Finite fields aka Galois Fields have existed for a long time and binary fields in particular (like $GF(256)$ we use here) are used extensively by [cryptographic routines like AES](https://www.cs.uaf.edu/2015/spring/cs463/lecture/03_23_AES.html), and some CPUs even have [dedicated instructions](https://en.wikipedia.org/wiki/CLMUL_instruction_set) to enable fast math operations in the field.
+
+For a number-theory description of galois fields, this Cryptography StackOverflow [answer to 'Galois fields in cryptography'](https://crypto.stackexchange.com/a/2718/6556) gives a great overview.
+
+For an on-the-metal description of how math operations $+-\div×$ work in $GF(256)$, this page seems to cover it nicely: [samiam.org/galois.html](https://samiam.org/galois.html)
+
+
+"
+
+# ╔═╡ d573e0aa-4110-4d83-9ef3-68addd3ff9b8
+md"
+## Code
+
+The code in this post is written in [Julia](https://julialang.org/) using a computational notebook [Pluto.jl](https://plutojl.org/).
+
+The main packages that we'll use are [GaloisFields.jl](https://github.com/tkluck/GaloisFields.jl) which supports defining a much wider range of fields than what we use here, and [LinearAlgebraX.jl](https://github.com/scheinerman/LinearAlgebraX.jl) which defines functions that operate on exact/finite matrices (as opposed to Real/float).
+"
 
 # ╔═╡ 0ad5b059-9539-437b-97f5-e73ec1c06419
-md"First lets define our field, and some conversion functions to make using it easy:"
+md"
+First lets define the field we'll be using today:
+"
 
 # ╔═╡ b5fc120c-7727-4b53-bdc5-5352cd96dac1
 const G = @GaloisField! 2^8 β
+
+# ╔═╡ ef00d3c8-6ab4-4f86-ae6b-9fca3d71d5cb
+md"## Quick tour of the field 𝔽₂₅₆"
+
+# ╔═╡ e7621cea-c449-4b43-bd50-ba4646e2b48a
+md"
+Typical use of fields offered by this library includes exponentiating $β$ and performing operations on the results.
+"
+
+# ╔═╡ 9b964dbc-c78b-4246-bf7a-0761b9c97bc7
+β^10
+
+# ╔═╡ 52fcf820-cddd-4e36-86e9-afcb32f09403
+β^10 * (β^10 + β^6)
+
+# ╔═╡ 62e4fa8b-7fb7-4904-963f-a1b9c4176dc7
+md"
+The most notable feature of finite fields is that the results of all operations are also members of the field.
+"
+
+# ╔═╡ 710eef31-f07d-41f0-b410-dc6727f3589e
+β^256
+
+# ╔═╡ d9855f4f-c6d9-4bcf-ac25-e7f43b8b443b
+md"
+This is fun to play with but we need to convert bytes into field values and back. So we define some (ill-advised) conversion functions:
+"
 
 # ╔═╡ cec1b298-bf51-4500-97ae-5189a2049286
 begin # conversions between G <-> UInt8 and Matrix{G} <-> Matrix{UInt8}
 
 Base.convert(::Type{UInt8}, gf::G) = gf.n
 Base.convert(::Type{G}, i::UInt8) = G(GaloisFields.Bits(), i)
+
 display(x::G) = convert(UInt8, x)
 display(x::Matrix{G}) = convert(Matrix{UInt8}, x)
 	
 end;
 
-# ╔═╡ ef00d3c8-6ab4-4f86-ae6b-9fca3d71d5cb
-md"## Quick tour of 𝔽₂₅₆"
+# ╔═╡ 89c9ca94-a428-442e-8dee-3a7b1b4f7338
+md"
+> Note, the author of the GaloisFields package [recommended against](https://github.com/tkluck/GaloisFields.jl/issues/17#issuecomment-879399545) implementing these conversion definitions as overrides on `Base.convert` because they can cause problems if you're not careful. We use them here in lieu of a better built-in solution.
+"
 
 # ╔═╡ f3e8221a-8d34-4442-a58f-9708952cb7b3
-md"Byte values successfully round-trip through $G$:"
+md"Byte values successfully round-trip through these conversions:"
+
+# ╔═╡ 5bb70b21-5cb4-4451-8229-3d806e611408
+display(convert(G, 0x11))
+
+# ╔═╡ fb8b6da2-c515-4afa-b31c-8bd3259cb0f7
+md"
+By the way, you can also call functions that take a single parameter like this, which I use throughout this post:
+"
 
 # ╔═╡ 95a21d02-68d2-477f-b98d-1b83d0da1cdb
-convert(UInt8, convert(G, 0x11))
+convert(G, 0x11) |> display
 
 # ╔═╡ 0c0f5ee4-a3e0-49df-aafd-903a4eaca2d0
 md"Addition is actually XOR:"
 
 # ╔═╡ 523979df-d971-48cf-a868-174a4ebc644a
-convert(UInt8, convert(G, 0x18) + convert(G, 0x08))
+convert(G, 0x18) + convert(G, 0x08) |> display
 
 # ╔═╡ a76ee3eb-a025-46f9-b4d8-1a9f47ab9c18
 md"And multiplication is... lets say not what you learned in high school algebra. That's ok though, it still offers the properties of multiplication that we need."
 
 # ╔═╡ c80af06b-3564-4e49-ae18-fcaf70cbc811
-convert(UInt8, convert(G, 0x20)*convert(G, 0x08))
+convert(G, 0x20) * convert(G, 0x08) |> display
 
 # ╔═╡ fec99716-09a8-4cd5-80de-b57e7eb90540
-md"However, every element has an inverse, which is not true of even integers mod 2^8:"
+md"Another notable property of finite fields is that every (nonzero) element has an inverse, which is not true of the ring of integers mod 256:"
 
 # ╔═╡ 40c3a591-1b86-4abe-b7e8-5467f7f173a1
-inv(convert(G, 0x08))
+inv(convert(G, 0x08)) |> display
 
 # ╔═╡ 3312903b-af7e-4088-bab9-f0e4c42c25fc
-md"## Deriving merklist entries from bytes"
+md"
+## Deriving matrix entries from bytes
+
+We have a new requirement compared to the last version: the matrix returned by `mk_entry` must be [invertible](https://en.wikipedia.org/wiki/Invertible_matrix).
+"
+
+# ╔═╡ 1d7a824a-73c5-4e21-9b2b-6b4923ea49c7
+md"
+`mk_entry` uses the `sha2_512` hash of `data` to derive an invertible 8×8 Matrix{𝔽₂₅₆}. Every candidate matrix hash has a 1/256 chance of not being invertible, so if the invertibility check fails a new matrix hash based on `data` is calculated and attempted again. Each round is calculated by prefixing `data` with a byte indicating the attempt number, as in:
+
+```julia
+# note: * is concatenation in julia, because monoid
+digest_round1 = sha2_512([UInt8(1)] * data)
+digest_round2 = sha2_512([UInt8(2)] * data)
+digest_round3 = sha2_512([UInt8(3)] * data)
+...
+```
+
+The first invertible digest in this sequence is taken to be the matrix hash of `data`. It is very rare that more than a couple rounds are needed to find an invertible matrix.
+
+`mk_entry` is defined below.
+"
 
 # ╔═╡ 786df805-b24b-482d-a842-1756a1c38510
-begin # this begin/end requirement for multi-statement cells is for the birds, Pluto
+begin
+	
+# keep count of rejected candidates by round number because I'm curious
+mk_entry_rejections = zeros(Int, 64)
 
-# mk_entry uses the sha2_512 hash of `data` to derive an invertible 8×8 Matrix{𝔽₂₅₆}.
-# Every candidate hash has a 1/256 chance of not being invertible. If the 
-# invertibility check fails, the hash digest is re-hashed and attempted again.
 function mk_entry(data::SHA.AbstractBytes)
-	ctx = SHA2_512_CTX()
-	update!(ctx, IV)
 	for i in 1:64
+		ctx = SHA2_512_CTX()
+		update!(ctx, [UInt8(i)])
 		update!(ctx, data)
-		data = digest!(ctx)
-		mat = convert(Matrix{G},reshape(data, 8, 8))
+		digest = digest!(ctx)
+		mat = convert(Matrix{G},reshape(digest, 8, 8))
 		if detx(mat) != 0
 			return mat
 		end
-		mk_entry_rejections[i] += 1 # record rejection for this iteration
-		ctx = SHA2_512_CTX()        # fresh ctx
+		mk_entry_rejections[i] += 1 # note this rejection in the bucket for this round
 	end
 end
+
+# Future: Use a different rejection design based on blake3 extended hash output?
+# https://github.com/pixel27/Blake3Hash.jl
 
 mk_entry(data::AbstractString) = mk_entry(String(data))
 mk_entry(data::String) = mk_entry(codeunits(data))
 
-# Due to non-invertibility rejections, a maliciously chosen input data could result in
-# the same hash as another input, which is clearly undesirable. Fix by prepending
-# every input data with this IV, which is impossible to generate within the rejection 
-# loop, and thus prevents any rejected hash from being interpreted as an entry itself.
-IV = sha2_512("IV prevents collisions between original and re-hashed entries")
-push!(IV, 0)
-	
-# keep count of candidates rejected by mk_entry because I'm curious
-mk_entry_rejections = zeros(Int, 64)
-
 end;
 
 # ╔═╡ 533b55c8-cbfc-4ab8-bb3c-3813e5b58bea
-md"So what do entries look like?"
+md"
+So what do entries look like?
+"
 
 # ╔═╡ 38f2b3fc-5078-4ee2-86f2-19d99c254166
 mk_entry("Hello world!")
 
 # ╔═╡ 7b2c1def-cdc7-4102-a66d-5a914a1b1eb0
-md"That's not very easy to read or compare, so we can convert entries back to UInt8 for display:"
+md"
+Hm, that's not very easy to read or compare, so we can convert entries back to UInt8 for display:
+"
 
 # ╔═╡ 8b251bfd-f61a-464f-a1b6-458dde096e14
 mk_entry("Hello world!") |> display
 
-# ╔═╡ 40a13273-b40f-4287-8b73-e1a8bcf119e2
+# ╔═╡ c58360f7-010d-459e-a9ab-20469f0a98fc
+md"
+## A tour of matrix multiplication properties
 
+We are using the matrix multiplication operation because it exhibits two desirable properties in particular:
+
+* Associativity
+* Non-Commutativity
+
+This is an unusual combination of properties for an operation:
+
+|     | associative | commutative |
+| --- | ---         | ---         |
+| $a+b$   | ✅ | ✅ |
+| $a×b$   | ✅ | ✅ |
+| $a-b$   | ❌ | ❌ |
+| $a\div b$   | ❌ | ❌ |
+| $a^b$ | ❌ | ❌ |
+| $M×N$ | ✅ | ❌ |
+
+Lets explore this with some simple examples for Merklist matrices. Here are a couple entries we can use to demonstrate.
+"
+
+# ╔═╡ 3f6fefd6-82c7-4f1f-b4c2-406faf39d0d2
+a = mk_entry("A"); b = mk_entry("B"); c = mk_entry("C");
+
+# ╔═╡ 7feb5e3c-1a71-432e-896a-263c8fff1815
+md"
+### Associativity
+
+If matrix multiplication is associative, then calculating the result of $a*b*c$ as $(a*b)*c$ vs $a*(b*c)$ should result in the same matrix, which you can see below:
+"
+
+# ╔═╡ 80028718-f19c-492a-9a0e-09c5819dd633
+[ (a*b)*c, a*(b*c) ] .|> display
+
+# ╔═╡ 35bb2711-b8a9-4561-9e38-dc070b35d5dc
+md"
+**This is the key property that will unlock use-cases that have gone unaddressed due to the design of hash functions up to this point.**
+"
+
+# ╔═╡ a82c8cc1-e69c-4c19-bf40-e6efeadb00de
+md"
+### Non-Commutativity
+
+If matrix multiplication is not commutative, then multiplying a matrix from the left ($a*b$) vs from the right ($b*a$) *should* cause the result to be different, which you can see is the case below:
+"
+
+# ╔═╡ 40a13273-b40f-4287-8b73-e1a8bcf119e2
+[ a*b, b*a ] .|> display
+
+# ╔═╡ 57f46d87-ca7a-4618-90f3-5a9ea8655bb2
+md"
+We *want* non-commutativity, because otherwise the result wouldn't describe a list.  Elements in a list have a defined order, that's what makes it a list and not something else like a set.
+"
 
 # ╔═╡ 201e4088-4481-4bdc-8c79-4a4fa5f23d61
-md"## Reducing entries by matrix multiplication"
+md"
+## Finding the hash of a large list
+"
+
+# ╔═╡ 87bedc95-8423-4be9-b25c-08e775ffb540
+count = 1000000;
+
+# ╔═╡ d9c3ebda-3678-4421-980e-0efd24f8a8f9
+md"
+Now, invertible matrices over finite fields form a [group](https://en.wikipedia.org/wiki/Group_(mathematics)), meaning that we should never run into any degenerate cases like a zero matrix. But the minimum we might do to validate this emperically is test it with a list that has a lot of elements. Lets try $count.
+"
 
 # ╔═╡ a8a7559f-2f9f-4f30-b8b8-f964b59da354
-md"### Helper definitions"
+md"#### Helper definitions"
 
 # ╔═╡ 85d19b91-c0a2-43be-abbb-28a7387195a6
-# format_int is shorthand for formatting an int as a string
+# format_int is shorthand for formatting the digits of an an int into a string
 format_int(x::Int) = @sprintf("%d", x);
 
 # ╔═╡ 258da454-caf5-46c9-a45a-4df2fd44bf02
 # chunk_range partitions a UnitRange into `n` ranges, with leftover elements spread 
 # among the first chunks
 function chunk_range(r::UnitRange{}, n::Int)
-	chunk_size = (r.stop-r.start) ÷ n
-	if chunk_size * n < (r.stop-r.start)
+	# this is why I prefer 1-based indexing, c'est la vie
+	chunk_size = (r.stop-r.start+1) ÷ n
+	if chunk_size * n < (r.stop-r.start+1)
 		chunk_size += 1
 	end
 	collect(partition(r, chunk_size))
 end;
 
 # ╔═╡ f4ca59b9-ca2f-4458-950a-b87dee7e3115
+# zero is the zero-matrix over G, and is just used for initialization
 zero = zeros(G, 8, 8);
 
-# ╔═╡ b1812ddd-6878-4c15-936c-e6db4eaad7d4
-I = eye(G, 8);
-
-# ╔═╡ da85f422-dcb6-425b-b3dd-19920daee295
-md"### Reducing many elements"
-
-# ╔═╡ 87bedc95-8423-4be9-b25c-08e775ffb540
-count = 10000;
+# ╔═╡ 3d7c33df-74fb-49a8-98e2-c32456c1bf76
+md"
+### Single thread 
+"
 
 # ╔═╡ f8bc7a62-3b4a-47f7-936f-f5370a6efe97
 # Normal left-to-right reduction
-sum = reduce(*, 1:count .|> format_int .|> mk_entry); sum |> display
+digest = reduce(*, 1:count .|> format_int .|> mk_entry); digest |> display
 
 # ╔═╡ 67ee30f8-240d-4cfd-b03f-ca620790e0b0
-md"You might read this as, take the range of numbers `1:count`, for each number convert it into a string `.|> format_int`, for each string generate the merklist entry `.|> mk_entry`, reduce all the entries by the `*` / matrix multiplication operator from left to right `reduce(*, ...)`, assign the result to the sum variable `sum = ...`. Then display sum `sum |> display`."
+md"
+You might read this as:
+
+* `1:count` - take the range of numbers from `1` to `count` (1-$count)
+* `.|> format_int` - for each number convert it into a string
+* `.|> mk_entry` - for each string element generate its matrix hash
+* `reduce(*, ...)` - reduce all the matrix elements by `*` / matrix multiplication from left to right
+* `digest = ...;` - assign the result to the variable `digest`
+* `digest |> display` - display `digest` in a readable format
+"
 
 # ╔═╡ 786a6537-296e-40d6-830f-93ac232e2cf7
 md"### Parallel reduction"
 
+# ╔═╡ ceb7e3f7-031f-4b9e-9fa8-7678924db12c
+md"
+If the reduction is associative, then we should be able to break this calculation up into several chunks, calculate the hash of each chunk separately, then combine the hashes and get the same result as the single-threaded case.
+"
+
 # ╔═╡ 8e3a5919-d825-48bf-bde7-0a1cffca46b6
 # Chunk up the range and reduce in multiple threads, then join the results
 begin
-	psum_partial = repeat([zero], Threads.nthreads())
+	pdigest_partial = repeat([zero], Threads.nthreads())
+	
 	@threads for chunk in chunk_range(1:count, Threads.nthreads())
 		rd = reduce(*, chunk .|> format_int .|> mk_entry)
-		psum_partial[threadid()] = rd
+		pdigest_partial[threadid()] = rd
 	end
-	psum = reduce(*, psum_partial)
-	psum |> display
+	
+	pdigest = reduce(*, pdigest_partial)
+	pdigest |> display
 end
 
 # ╔═╡ 1167b981-6baa-40f6-934a-928eea39ee1a
-md"Given that reducing sections of an ordered sequence of elements independently and combining them later is an explicit goal, one would hope that these two reductions are equivalent, which they are:"
+md"
+You can't see from rendering this notebook as HTML, but the second one completes 2-3x faster on my machine. Neat! And yes they are identical:
+"
 
 # ╔═╡ 8dca48af-89c2-4528-a976-fd3c9992e2c2
-sum == psum
+digest == pdigest
 
 # ╔═╡ 57adf406-ae46-41d9-a9ad-0c5c66489c12
-md"Notably, you can see that we got a fair number of rejected candidate matrices in `mk_entry()`, and even some that were rejected twice. This isn't exploitable, since the chance of rejecting non-invertible matrices 64 times is the same as finding a hash collision, $\frac{1}{256}^{64}$. Though it may leak some pesky timing data."
+md"
+#### Analyzing rejected candidate matrices
+By inspecting the rejections array we can see that we got a fair number of rejected candidate matrices in `mk_entry()`, and even some that were rejected more than once. This isn't exploitable, since the chance of finding a series of non-invertible matrices 64 times in a row is low enough as to be impossible to find. Note that the ratio of any pair of adjacent elements in this array should be approx. $1/256$. This rejection sampling approach may leak some pesky timing information, but that's well beyond the scope of this post.
+"
 
-# ╔═╡ c9c772d1-9585-4af2-bb1e-b9e1ba5eaed3
+# ╔═╡ be3d561c-75ab-4e17-91b6-a23921ad3aa4
 mk_entry_rejections
+
+# ╔═╡ a9283164-7b8d-40e0-9a3a-ff26fcc477d0
+md"
+## What's next?
+
+First, I'd like to validate that the list hashes aren't susceptible to preimage attacks, collisions, or other various vulnerabilities. The statement I'd like to prove cryptographically/probabalistically is something along the lines of 'it's impossible to find any two sequences of byte buffers that have the same list hash'.
+
+There's a couple applications that I think would be a good use-case:
+
+* Integrate list hashes into some ordered kv-store to demonstrate that it's possible to maintain the hash of the whole database without any additional IO and minimal impact on the data structures.
+* Replace [merkle-DAG data structure used by IPFS](https://docs.ipfs.io/how-to/work-with-blocks/) to store large files in chunks.
+* Use list hashes to develop a system to syncronize two data stores, like rsync. (Say, a bloom filter of the list hashes of all sub-sequences?)
+* Go head-to-head with merkle trees as the defacto primitive for crypto data structures. (Ok maybe it's a little soon for this one 😅.)
+"
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -453,13 +629,23 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 # ╔═╡ Cell order:
 # ╟─8ad81282-7a8e-4769-81d4-bb7fd3b7b1a5
 # ╟─d8ab88dc-2278-42a7-b6e0-2dd67aad9c0f
+# ╟─d573e0aa-4110-4d83-9ef3-68addd3ff9b8
 # ╠═58f1747c-e2a1-11eb-2c26-95ef11565850
 # ╠═c7472820-0a79-4156-8d0e-e4367868c57e
 # ╟─0ad5b059-9539-437b-97f5-e73ec1c06419
 # ╠═b5fc120c-7727-4b53-bdc5-5352cd96dac1
-# ╠═cec1b298-bf51-4500-97ae-5189a2049286
 # ╟─ef00d3c8-6ab4-4f86-ae6b-9fca3d71d5cb
+# ╟─e7621cea-c449-4b43-bd50-ba4646e2b48a
+# ╠═9b964dbc-c78b-4246-bf7a-0761b9c97bc7
+# ╠═52fcf820-cddd-4e36-86e9-afcb32f09403
+# ╟─62e4fa8b-7fb7-4904-963f-a1b9c4176dc7
+# ╠═710eef31-f07d-41f0-b410-dc6727f3589e
+# ╟─d9855f4f-c6d9-4bcf-ac25-e7f43b8b443b
+# ╠═cec1b298-bf51-4500-97ae-5189a2049286
+# ╟─89c9ca94-a428-442e-8dee-3a7b1b4f7338
 # ╟─f3e8221a-8d34-4442-a58f-9708952cb7b3
+# ╠═5bb70b21-5cb4-4451-8229-3d806e611408
+# ╟─fb8b6da2-c515-4afa-b31c-8bd3259cb0f7
 # ╠═95a21d02-68d2-477f-b98d-1b83d0da1cdb
 # ╟─0c0f5ee4-a3e0-49df-aafd-903a4eaca2d0
 # ╠═523979df-d971-48cf-a868-174a4ebc644a
@@ -468,27 +654,37 @@ uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
 # ╟─fec99716-09a8-4cd5-80de-b57e7eb90540
 # ╠═40c3a591-1b86-4abe-b7e8-5467f7f173a1
 # ╟─3312903b-af7e-4088-bab9-f0e4c42c25fc
+# ╟─1d7a824a-73c5-4e21-9b2b-6b4923ea49c7
 # ╠═786df805-b24b-482d-a842-1756a1c38510
 # ╟─533b55c8-cbfc-4ab8-bb3c-3813e5b58bea
 # ╠═38f2b3fc-5078-4ee2-86f2-19d99c254166
 # ╟─7b2c1def-cdc7-4102-a66d-5a914a1b1eb0
 # ╠═8b251bfd-f61a-464f-a1b6-458dde096e14
+# ╟─c58360f7-010d-459e-a9ab-20469f0a98fc
+# ╠═3f6fefd6-82c7-4f1f-b4c2-406faf39d0d2
+# ╟─7feb5e3c-1a71-432e-896a-263c8fff1815
+# ╠═80028718-f19c-492a-9a0e-09c5819dd633
+# ╟─35bb2711-b8a9-4561-9e38-dc070b35d5dc
+# ╟─a82c8cc1-e69c-4c19-bf40-e6efeadb00de
 # ╠═40a13273-b40f-4287-8b73-e1a8bcf119e2
-# ╠═201e4088-4481-4bdc-8c79-4a4fa5f23d61
+# ╟─57f46d87-ca7a-4618-90f3-5a9ea8655bb2
+# ╟─201e4088-4481-4bdc-8c79-4a4fa5f23d61
+# ╟─d9c3ebda-3678-4421-980e-0efd24f8a8f9
+# ╠═87bedc95-8423-4be9-b25c-08e775ffb540
 # ╟─a8a7559f-2f9f-4f30-b8b8-f964b59da354
 # ╠═85d19b91-c0a2-43be-abbb-28a7387195a6
 # ╠═258da454-caf5-46c9-a45a-4df2fd44bf02
 # ╠═f4ca59b9-ca2f-4458-950a-b87dee7e3115
-# ╠═b1812ddd-6878-4c15-936c-e6db4eaad7d4
-# ╟─da85f422-dcb6-425b-b3dd-19920daee295
-# ╠═87bedc95-8423-4be9-b25c-08e775ffb540
+# ╟─3d7c33df-74fb-49a8-98e2-c32456c1bf76
 # ╠═f8bc7a62-3b4a-47f7-936f-f5370a6efe97
 # ╟─67ee30f8-240d-4cfd-b03f-ca620790e0b0
 # ╟─786a6537-296e-40d6-830f-93ac232e2cf7
+# ╟─ceb7e3f7-031f-4b9e-9fa8-7678924db12c
 # ╠═8e3a5919-d825-48bf-bde7-0a1cffca46b6
 # ╟─1167b981-6baa-40f6-934a-928eea39ee1a
 # ╠═8dca48af-89c2-4528-a976-fd3c9992e2c2
 # ╟─57adf406-ae46-41d9-a9ad-0c5c66489c12
-# ╠═c9c772d1-9585-4af2-bb1e-b9e1ba5eaed3
+# ╠═be3d561c-75ab-4e17-91b6-a23921ad3aa4
+# ╟─a9283164-7b8d-40e0-9a3a-ff26fcc477d0
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
